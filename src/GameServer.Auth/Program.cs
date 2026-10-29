@@ -146,7 +146,14 @@ static async Task HandleConnection(TcpClient tcp, LoginServerKeys keys, AccountS
             // Anything the client sent after its 0x0002 is already ciphertext.
             var incoming = new LoginMessageStream(LoginDirection.ClientToServer);
             InstanceDirectory.LoginLink? link = null;
-            var session = new LoginServerSession(accounts) { Keyring = keyring, Leagues = LeagueCatalog.FromEnvironment(), CharacterDeleted = SetSaveAside, Assign = s => directory.AssignStart(s, link!) };
+            // The instance server the client is sent to: Game_GATEWAY_HOST / Game_GATEWAY_PORT, as the Gateway reads them
+            // for area changes, so a stack on other ports stays consistent (GettingStarted.md, Configuration).
+            var session = new LoginServerSession(accounts)
+            {
+                Keyring = keyring, Leagues = LeagueCatalog.FromEnvironment(), CharacterDeleted = SetSaveAside, Assign = s => directory.AssignStart(s, link!),
+                InstanceHost = Environment.GetEnvironmentVariable("Game_GATEWAY_HOST") ?? "127.0.0.1",
+                InstancePort = ushort.TryParse(Environment.GetEnvironmentVariable("Game_GATEWAY_PORT"), out var gatewayPort) ? gatewayPort : (ushort)6112,
+            };
             link = new InstanceDirectory.LoginLink(stream, ciphers, session, peer);
             byte[] rest = buf[used..have];
             try

@@ -375,8 +375,8 @@ Environment variables, read when each server starts:
 | `Game_GATEWAY_ENTER` | `1` (set by `live.ps1`) | `1` = enter the area after creating the player |
 | `Game_BIND` | `127.0.0.1` | address Auth and Gateway listen on |
 | `Game_LOGIN_PORT` | 20493 | login server port (must match step 6) |
-| `Game_GATEWAY_PORT` | 6112 | instance server port |
-| `Game_GATEWAY_HOST` | 127.0.0.1 | address sent to the client for area changes |
+| `Game_GATEWAY_PORT` | 6112 | instance server port (the Gateway listens on it; Auth and area changes send it to the client) |
+| `Game_GATEWAY_HOST` | 127.0.0.1 | address sent to the client by Auth at login and by the Gateway for area changes |
 | `Game_AUTH_CONTROL_PORT` | 20495 | Auth ↔ Gateway control port (localhost only) |
 | `Game_CLIENT_EXE` | `Client/Game.exe` | client executable the Gateway reads protocol constants from |
 | `Game_RANDOM_SEEDS` | unset | new instances of the areas the Gateway generates itself (`gate-baseline.json`, [re/011](docs/re/011-level-generation.md)) get random seeds, every other area seed 1; `0` = seed 1 everywhere |
