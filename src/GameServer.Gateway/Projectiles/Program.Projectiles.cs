@@ -210,9 +210,9 @@ partial class Program
             double more = contact.Multiplier * (contact.Phase > 0 ? shot.ReturnMultiplier : 1);
             if (!shot.Spell && shot.FarShot) more *= AntiquarianEffects.FarShot(contact.Projectile.Distance);
             var baseHit = contact.IsArea ? shot.AreaHit ?? shot.Hit : shot.Hit;
-            var packet = new SkillDamageContext(shot.Spell ? SkillHitKind.Spell : SkillHitKind.Attack,
-                CharacterPlayerStats(Conn)).Hit(baseHit).Scale(more);
-            var gambler = GamblerFor(CharacterPlayerStats(Conn));
+            var player = CharacterPlayerStats(Conn);
+            var packet = new SkillDamageContext(shot.Spell ? SkillHitKind.Spell : SkillHitKind.Attack, player).Hit(baseHit).Scale(more);
+            var gambler = GamblerFor(player);
             var rolled = (gambler with { DamageMorePct = 0 }).RollOutgoingHit(packet, random);
             if (!shot.Spell)
             {
@@ -232,7 +232,11 @@ partial class Program
             RageOnHitLocked(Conn, attack: !shot.Spell, melee: false, critical, shot.SkillStats,
                 contact.Projectile.ReactionRandomSource);
             ChargesOnHit(Conn, target, critical, shot.Spell, shot.Effect, shot.Level, shot.Quality, melee: false);
-            CommitProjectileHit(this, contact, target, hit.Value, damage, shot, critical);
+            // The hit's presentation (0x1af): its type, critical layer and stun (HitReaction claims the monster here).
+            var effects = new MonsterHitEffects(shot.Spell, critical, HitPresentation.DominantType(rolled), hit.Value.Life > 0
+                ? HitReaction.TryStun(target, damage, contact.At / (double)ProjectileRuntime.QuantaPerSecond,
+                    contact.Projectile.ReactionRandomSource, StunDurationPct(player)) : null);
+            CommitProjectileHit(this, contact, target, hit.Value, damage, shot, critical, effects);
             return ProjectileHitResult.Hit;
         }
 

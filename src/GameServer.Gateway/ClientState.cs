@@ -105,9 +105,9 @@ sealed class SpawnedMonster(string label, WalkEstimator walk, int aggroRange, in
     public int StopRange => stopRange;
     public uint MaxLife { get; } = maxLife;
     public uint Life = maxLife;
-    // Until when its last flinch plays (Clock seconds; HitReaction): no new flinch before. Guarded by the Monsters
-    // lock.
-    public double FlinchUntil = double.NegativeInfinity;
+    // When its last stun landed and until when it holds (AI clock seconds; HitReaction): no new stun before, a swing
+    // started before the stun is cancelled. Guarded by the Monsters lock.
+    public double StunnedAt = double.NegativeInfinity, StunnedUntil = double.NegativeInfinity;
     public bool Aggro, Dead;
     // Soul credit alone is idempotent; this does not alter existing XP, loot, quest or charge policy.
     public bool SoulKillProcessed;

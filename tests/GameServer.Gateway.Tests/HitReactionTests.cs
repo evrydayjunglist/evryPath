@@ -4,63 +4,123 @@ namespace GameServer.Gateway.Tests;
 
 public class HitReactionTests
 {
-    static SpawnedMonster Monster(uint maxLife = 100, double seconds = 0, params int[] flinches) =>
+    static SpawnedMonster Monster(uint maxLife = 100, int clips = 1) =>
         new("Rhoa@1", new WalkEstimator(0, 0, 30, null, 2000, 2000), aggroRange: 60, stopRange: 3, maxLife: maxLife)
         {
-            HitAnimations = [.. flinches.Select(i => new HitAnimation(i, seconds))],
+            HitAnimations = [.. Enumerable.Range(0, clips).Select(i => new HitAnimation(7 + i, 0.5))],
         };
 
-    static HitAnimation? Flinch(SpawnedMonster m, int damage, double now) => HitReaction.TryFlinch(m, damage, now, new Random(1));
+    static double? Stun(SpawnedMonster m, int damage, double now, int seed = 1, int durationPct = 0) =>
+        HitReaction.TryStun(m, damage, now, new Random(seed), durationPct);
 
     [Fact]
-    public void A_hit_below_a_tenth_of_max_life_does_not_flinch()
+    public void The_stun_chance_is_200_times_the_damage_over_max_life_above_a_fifth()
     {
-        var m = Monster(100, 0, 7);
-        Assert.Null(Flinch(m, 9, now: 10));
-        Assert.Equal(7, Flinch(m, 10, now: 10)?.Index);
+        Assert.Equal(0, HitReaction.StunChance(10, 100));    // exactly 20%: nothing
+        Assert.Equal(22, HitReaction.StunChance(11, 100));
+        Assert.Equal(100, HitReaction.StunChance(50, 100));
+        Assert.Equal(100, HitReaction.StunChance(90, 100));
+        Assert.Equal(0, HitReaction.StunChance(0, 100));
+        Assert.Equal(0, HitReaction.StunChance(5, 0));
     }
 
     [Fact]
-    public void The_threshold_follows_the_max_life()
+    public void The_stun_lasts_350_ms_grown_by_the_attackers_stun_duration()
     {
-        var m = Monster(1000, 0, 7);
-        Assert.Null(Flinch(m, 99, now: 10));
-        Assert.NotNull(Flinch(m, 100, now: 10));
+        Assert.Equal(0.35, HitReaction.StunSeconds(0));
+        Assert.Equal(0.7, HitReaction.StunSeconds(100));
+        Assert.Equal(0.42, HitReaction.StunSeconds(20));
+        Assert.Equal(0, HitReaction.StunSeconds(-100));
     }
 
     [Fact]
-    public void A_monster_flinches_at_most_every_0_4_s()
+    public void A_hit_of_half_the_max_life_always_stuns()
     {
-        var m = Monster(100, 0, 7);
-        Assert.NotNull(Flinch(m, 50, now: 10));
-        Assert.Null(Flinch(m, 50, now: 10.3));
-        Assert.NotNull(Flinch(m, 50, now: 10.4));
+        for (int seed = 0; seed < 50; seed++)
+        {
+            var m = Monster();
+            Assert.Equal(0.35, Stun(m, 50, now: 10, seed));
+            Assert.Equal(10, m.StunnedAt);
+            Assert.Equal(10.35, m.StunnedUntil);
+        }
     }
 
     [Fact]
-    public void A_clip_longer_than_0_4_s_holds_the_next_flinch_until_it_has_played()
+    public void A_hit_of_a_tenth_of_the_max_life_never_stuns()
     {
-        var m = Monster(100, 0.8, 7);
-        Assert.NotNull(Flinch(m, 50, now: 10));
-        Assert.Null(Flinch(m, 50, now: 10.45));
-        Assert.Null(Flinch(m, 50, now: 10.79));
-        Assert.NotNull(Flinch(m, 50, now: 10.8));
+        for (int seed = 0; seed < 50; seed++) Assert.Null(Stun(Monster(1000), 100, now: 10, seed));
     }
 
     [Fact]
-    public void A_dead_monster_does_not_flinch()
+    public void A_hit_between_rolls_its_chance()
     {
-        var m = Monster(100, 0, 7);
-        m.Life = 0;
-        Assert.Null(Flinch(m, 50, now: 0));
-        var marked = Monster(100, 0, 7);
+        int stuns = 0;
+        for (int seed = 0; seed < 200; seed++) if (Stun(Monster(), 25, now: 10, seed) is not null) stuns++;   // 50%
+        Assert.InRange(stuns, 70, 130);
+    }
+
+    [Fact]
+    public void A_stunned_monster_is_not_stunned_again_until_it_recovers()
+    {
+        var m = Monster();
+        Assert.NotNull(Stun(m, 50, now: 10));
+        Assert.Null(Stun(m, 50, now: 10.3));
+        Assert.NotNull(Stun(m, 50, now: 10.35));
+        Assert.Equal(10.35, m.StunnedAt);
+    }
+
+    [Fact]
+    public void The_attackers_stun_duration_lengthens_the_stun()
+    {
+        var m = Monster();
+        Assert.Equal(0.7, Stun(m, 50, now: 10, durationPct: 100));
+        Assert.Equal(10.7, m.StunnedUntil);
+    }
+
+    [Fact]
+    public void A_dead_monster_or_one_without_a_TakeHit_clip_is_not_stunned()
+    {
+        var dead = Monster();
+        dead.Life = 0;
+        Assert.Null(Stun(dead, 50, now: 0));
+        var marked = Monster();
         marked.Dead = true;
-        Assert.Null(Flinch(marked, 50, now: 0));
+        Assert.Null(Stun(marked, 50, now: 0));
+        Assert.Null(Stun(Monster(clips: 0), 50, now: 0));
     }
 
     [Fact]
-    public void A_variety_without_a_TakeHit_clip_does_not_flinch()
+    public void A_stun_stops_the_monsters_walk_and_holds_its_AI_for_the_duration()
     {
-        Assert.Null(Flinch(Monster(100), 50, now: 0));
+        var m = Monster();
+        m.Walk.Order(300, 0, now: 0);
+        m.LastTarget = (300, 0);
+        m.BusyUntil = 0;
+        var before = m.Walk.Position(2);
+        Assert.NotEqual((0, 0), before);
+        Assert.NotNull(Stun(m, 50, now: 2));
+        Assert.Equal(before, m.Walk.Position(5));   // stopped where the stun landed
+        Assert.Equal(2.35, m.BusyUntil);
+        Assert.Null(m.LastTarget);
+        // A longer hold (an emerge, a cast) is kept.
+        var busy = Monster();
+        busy.BusyUntil = 30;
+        Assert.NotNull(Stun(busy, 50, now: 2));
+        Assert.Equal(30, busy.BusyUntil);
+    }
+
+    [Fact]
+    public void A_stun_since_the_swing_started_cancels_its_contact()
+    {
+        var m = Monster();
+        Assert.False(HitReaction.InterruptsSwing(m, swingStartedAt: 10, now: 10.6));
+        Assert.NotNull(Stun(m, 50, now: 10.2));
+        Assert.True(HitReaction.InterruptsSwing(m, swingStartedAt: 10, now: 10.6));   // even after it recovered at 10.55
+        Assert.False(HitReaction.InterruptsSwing(m, swingStartedAt: 10.3, now: 10.6));   // a swing after the stun lands
+        // A swing started while a stun still holds is cancelled too.
+        var held = Monster();
+        Assert.NotNull(Stun(held, 50, now: 9.9));
+        Assert.True(HitReaction.InterruptsSwing(held, swingStartedAt: 10, now: 10.2));
+        Assert.False(HitReaction.InterruptsSwing(held, swingStartedAt: 10, now: 10.4));
     }
 }

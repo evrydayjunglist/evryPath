@@ -246,12 +246,15 @@ partial class Program
     {
         if (InGracePeriod(conn)) return;
         var a = m.Attack!;
+        double swingAt;
         lock (conn.Monsters)
         {
             // AI work queued during a failed transfer must not become a new swing when admission resumes.
             if (conn.Closed || conn.LeavingArea || conn.PlayerLife == 0 || m.Dead || m.Life == 0 || !m.Hostile
                 || epoch != conn.IncomingHitEpoch
                 || !conn.Monsters.TryGetValue(id, out var current) || !ReferenceEquals(m, current) || InGracePeriod(conn)) return;
+            // When the swing starts (the AI's tick): a stun from here on cancels its contact (HitReaction).
+            swingAt = ProjectileWorldTime(conn);
         }
         bool started = false;
         await Send(remote, stream, ciphers,
@@ -285,6 +288,12 @@ partial class Program
                     || !ReferenceEquals(m, current) || InGracePeriod(conn)) return;
                 if (conn.Paused) continue;
                 double now = ProjectileWorldTime(conn);
+                // A stun since the swing started interrupted it on the client (0x1af, HitReaction): no contact.
+                if (HitReaction.InterruptsSwing(m, swingAt, now))
+                {
+                    Console.WriteLine($"[gateway] {remote} monster 0x{id:x} ({m.Label}) swing interrupted by a stun");
+                    return;
+                }
                 int priorContacts = conn.RecentEnemyHits.Count(now);
                 using var defenceTime = FortificationOf(conn).Capture(now);
                 // Resolve lazy final defences here, never at AI collection or before a queued echo/pause wait.
@@ -372,10 +381,15 @@ partial class Program
         if (life == 0)
             await Send(remote, stream, ciphers, InstanceEntities.StatsUpdate(PlayerId, [(StatKeys.HideMiniLifeBar, 1)]),
                 "0x01b3 player hide_mini_life_bar = 1");
+        // The hit's presentation on the player (0x1af, HitPresentation): blood and particles by the attack's type, the
+        // critical or block layer; processed at once (kind 3) against the attack started with sequence 0xffff. The stun is
+        // not in it: the server's own recovery decision goes out as 0x1d1 (SendPlayerHitRecovery), so the client does not
+        // roll a second avoidance on the same hit.
         await Send(remote, stream, ciphers,
-            InstanceProtocol.ActionHit(id, 0xffff, PlayerId, flags: 0x4601, kind: 0x02, u34: 450,
+            InstanceProtocol.ActionHit(id, 0xffff, PlayerId, flags: HitPresentation.Flags(critical: monsterCritical, blocked: blocked),
+                kind: 0x03, code: HitPresentation.Code(HitPresentation.DominantType(a.Damage)),
                 angle: HitAngle(player.X - from.X, player.Y - from.Y)),
-            $"0x01af monster 0x{id:x} hit on the player (sequence 0xffff)");
+            $"0x01af monster 0x{id:x} hit on the player (sequence 0xffff{(monsterCritical ? ", critical" : "")}{(blocked ? ", blocked" : "")})");
         await Send(remote, stream, ciphers, InstanceProtocol.LifeUpdate(PlayerId, life),
             $"0x01b1 player hit by monster 0x{id:x} for {damage}{(monsterCritical ? " (critical)" : "")}" +
             $"{(rawDamage != damage ? $" ({rawDamage} physical before {DamageModel.ArmourReduction(armour.EffectiveArmour, rawDamage)}% armour, effective rating {armour.EffectiveArmour})" : "")}" +

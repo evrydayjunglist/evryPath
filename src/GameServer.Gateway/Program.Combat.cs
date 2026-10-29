@@ -200,6 +200,7 @@ partial class Program
         int impaleStacks, damage;
         bool impaled, critical;
         string? resistance;
+        MonsterHitEffects effects;
         using (ProjectileMutation(conn))
         {
             if (m.Life == 0) return;
@@ -248,6 +249,8 @@ partial class Program
                 CollectVaalSoulAtDeathLocked(conn, m);
             }
             RageOnHitLocked(conn, attack: true, melee: WeaponProfileFor(conn, activeSet: true).Melee, critical);
+            effects = new(Spell: false, critical, HitPresentation.DominantType(rolled),
+                life > 0 ? HitReaction.TryStun(m, damage, ProjectileWorldTime(conn), Random.Shared, StunDurationPct(player)) : null);
         }
         ChargesOnHit(conn, m, critical, spell: false);
         if (critical) _ = GainFlaskChargesOnCrit(remote, stream, ciphers, conn);   // the hit landed
@@ -256,16 +259,14 @@ partial class Program
         if (life == 0)
             await Send(remote, stream, ciphers, InstanceEntities.StatsUpdate(use.TargetId, [(StatKeys.HideMiniLifeBar, 1)]),
                 $"0x01b3 monster 0x{use.TargetId:x} hide_mini_life_bar = 1");
-        // The hit reaction: one of the rig's TakeHit clips and its SoundEvent (0x1b2).
-        await SendFlinch(remote, stream, ciphers, conn, use.TargetId, m, damage, log: true);
-        // The hit result for the client's damage/effect pipeline (0x1af): the client applies the hit locally (the target's
-        // blood, the weapon impact sound "bonk") and 0x1b1 stays authoritative on life. flags 0x4201 is the real server's
-        // player-melee hit (bit 0 hit, 0x200 damage, 0x4000 attack), kind 0x03 = action hit with hit data, the angle drives
-        // the directional blood.
+        // The hit result for the client's damage/effect pipeline (0x1af): the client applies the hit locally — the target's
+        // blood and particles by the hit's type, the critical layer, the weapon impact sound "bonk", and the stun that
+        // interrupts the monster and plays its TakeHit (HitPresentation, HitReaction) — and 0x1b1 stays authoritative on
+        // life. Kind 0x03 = the action's hit, processed at once; the angle drives the directional blood.
         await Send(remote, stream, ciphers,
-            InstanceProtocol.ActionHit(PlayerId, use.Sequence, use.TargetId, flags: 0x4201, kind: 0x03,
-                angle: HitAngle(target.X - stop.X, target.Y - stop.Y)),
-            $"0x01af player hit on monster 0x{use.TargetId:x} (sequence 0x{use.Sequence:x4})");
+            InstanceProtocol.ActionHit(PlayerId, use.Sequence, use.TargetId, flags: effects.Flags, kind: 0x03, code: effects.Code,
+                angle: HitAngle(target.X - stop.X, target.Y - stop.Y), u34: effects.StunMs),
+            $"0x01af player hit on monster 0x{use.TargetId:x} (sequence 0x{use.Sequence:x4}; {effects})");
         await Send(remote, stream, ciphers, InstanceProtocol.LifeUpdate(use.TargetId, life),
             $"0x01b1 monster 0x{use.TargetId:x} hit for {damage}{(critical ? " (critical)" : "")}" +
             (resistance is { } note ? $", {note}" : "") +
@@ -753,7 +754,7 @@ partial class Program
     // point too far for a melee skill. Attacks deal the weapon's hit as the default attack does, spells their own damage
     // (SkillCatalog.HitDamage) with the player's stats; both convert, crit and roll per monster. An attack's hit carries
     // the skill's damage effectiveness (SkillCatalog.DamageEffectiveness). Not modelled yet: the skills' own shapes (waves,
-    // cones, chains), stun, and the attack's accuracy roll.
+    // cones, chains) and the attack's accuracy roll.
     static async Task AreaSkillHit(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
         ushort skillId, (ushort Id, int Effect, string Name, int Level, int Quality, uint Gem) gem, (int X, int Y) from, (int X, int Y) to,
         bool immediate = false, ushort sequence = 0, int? actionToken = null, CooldownUseTicket? cooldownUse = null)
@@ -812,6 +813,7 @@ partial class Program
             int damage;
             bool critical;
             string? resistance;
+            MonsterHitEffects effects = default;
             using (ProjectileMutation(conn))
             {
                 // Catch up earlier projectile contacts before reading Rage or any other live offensive input.
@@ -853,13 +855,15 @@ partial class Program
                             !spell && SkillsFor(conn).IsMelee(gem.Effect), player, skillStats);
                     if (!rageGranted) rageGranted = RageOnHitLocked(conn, attack: !spell,
                         melee: !spell && SkillsFor(conn).IsMelee(gem.Effect), critical, skillStats);
+                    effects = new(spell, critical, HitPresentation.DominantType(rolled), applied.Value.Life > 0
+                        ? HitReaction.TryStun(m, damage, ProjectileWorldTime(conn), Random.Shared, StunDurationPct(player)) : null);
                 }
             }
             if (applied is not { } hit) continue;
             if (critical) _ = GainFlaskChargesOnCrit(remote, stream, ciphers, conn);
             await NotifyMonsterHit(remote, stream, ciphers, conn, id, m, hit, damage,
                 $"{gem.Name}{(critical ? " (critical)" : "")}{(resistance is null ? "" : $", {resistance}")}",
-                melee: !spell, sequence: sequence, deaths: deaths);
+                effects: effects, sequence: sequence, deaths: deaths);
             ChargesOnHit(conn, m, critical, spell, gem.Effect, gem.Level, gem.Quality, primary: id == targets[0].Id);
         }
         foreach (var (deadId, dead) in deaths) await MonsterKilled(remote, stream, ciphers, conn, deadId, dead);
@@ -882,7 +886,7 @@ partial class Program
     // A hit on a living monster: life is mutated once under Monsters, then notifications await outside the lock. False when
     // the monster was dead already or the action was replaced (the hit did not land).
     static async Task<bool> HitMonster(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn, uint id, SpawnedMonster m,
-        int damage, string by, bool log = true, bool melee = false, ushort sequence = 0, int? actionToken = null,
+        int damage, string by, bool log = true, MonsterHitEffects? effects = null, ushort sequence = 0, int? actionToken = null,
         CooldownUseTicket? cooldownUse = null, Action? accepted = null, List<(uint Id, SpawnedMonster M)>? deaths = null)
     {
         MonsterHit? hit;
@@ -898,7 +902,7 @@ partial class Program
             }
             if (hit is not null) accepted?.Invoke();
         }
-        if (hit is { } applied) await NotifyMonsterHit(remote, stream, ciphers, conn, id, m, applied, damage, by, log, melee, sequence, deaths);
+        if (hit is { } applied) await NotifyMonsterHit(remote, stream, ciphers, conn, id, m, applied, damage, by, log, effects, sequence, deaths);
         return hit is not null;
     }
 
@@ -950,26 +954,26 @@ partial class Program
     }
 
     static async Task NotifyMonsterHit(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn, uint id, SpawnedMonster m,
-        MonsterHit hit, int damage, string by, bool log = true, bool melee = false, ushort sequence = 0,
+        MonsterHit hit, int damage, string by, bool log = true, MonsterHitEffects? effects = null, ushort sequence = 0,
         List<(uint Id, SpawnedMonster M)>? deaths = null)
     {
         var (life, stageStarts) = hit;
         if (life == 0)
             await Send(remote, stream, ciphers, InstanceEntities.StatsUpdate(id, [(StatKeys.HideMiniLifeBar, 1)]),
                 !log ? null : $"0x01b3 monster 0x{id:x} hide_mini_life_bar = 1");
-        // The hit result for the client's damage/effect pipeline (0x1af): a melee hit plays the target's blood and the weapon
-        // impact sound "bonk" locally, 0x1b1 stays authoritative on life. Spells and projectiles have their own impact and skip it.
-        if (melee)
+        // The hit result for the client's damage/effect pipeline (0x1af), as in Attack: the target's blood and particles
+        // by the hit's type, the critical layer, the impact sound, and the stun that interrupts the monster and plays its
+        // TakeHit. Spells take the same path (their spell bit instead of the weapon's); 0x1b1 stays authoritative on life.
+        if (effects is { } presented)
         {
             double now = conn.Clock.Elapsed.TotalSeconds;
             var (px, py) = conn.Walk.Position(now);
             var (mx, my) = m.Walk.Position(now);
             await Send(remote, stream, ciphers,
-                InstanceProtocol.ActionHit(PlayerId, sequence, id, flags: 0x4201, kind: 0x03, angle: HitAngle(mx - px, my - py)),
-                !log ? null : $"0x01af player hit on monster 0x{id:x} (skill, sequence 0x{sequence:x4})");
+                InstanceProtocol.ActionHit(PlayerId, sequence, id, flags: presented.Flags, kind: 0x03, code: presented.Code,
+                    angle: HitAngle(mx - px, my - py), u34: presented.StunMs),
+                !log ? null : $"0x01af player hit on monster 0x{id:x} (skill, sequence 0x{sequence:x4}; {presented})");
         }
-        // The hit reaction: one of the rig's TakeHit clips and its SoundEvent (0x1b2), as in Attack.
-        await SendFlinch(remote, stream, ciphers, conn, id, m, damage, log);
         await Send(remote, stream, ciphers, InstanceProtocol.LifeUpdate(id, life),
             !log && life > 0 ? null : $"0x01b1 monster 0x{id:x} hit by {by} for {damage}, life {life}/{m.MaxLife}{(life == 0 ? " (dies)" : "")}");
         // One sweep's deaths (loot, experience, quests) wait until every monster of the sweep has its hit (AreaSkillHit).
@@ -977,21 +981,9 @@ partial class Program
         if (stageStarts) _ = RunBossStage(remote, stream, ciphers, conn, id, m);
     }
 
-    // The hit reaction: one of the rig's TakeHit clips and its SoundEvent, S→C 0x1b2 kind 0 (see Attack and HitMonster).
-    // A killing blow gets none: the client's Life component runs the death instead, and the flinch would only be cut off.
-    // The gates (HitReaction) keep it a stun-like reaction rather than a loop; see that class. The monster is checked again
-    // inside the send gate: a hit that kills it meanwhile marks it Dead before it sends its own 0x1b1, so the flinch either
-    // goes out before the death or not at all.
-    static async Task SendFlinch(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn, uint id,
-        SpawnedMonster m, int damage, bool log)
-    {
-        HitAnimation? clip;
-        lock (conn.Monsters) clip = HitReaction.TryFlinch(m, damage, conn.Clock.Elapsed.TotalSeconds, Random.Shared);
-        if (clip is not { } flinch) return;
-        await Send(remote, stream, ciphers, InstanceProtocol.AnimationUpdate(id, 0, (uint)flinch.Index, 1f),
-            !log ? null : $"0x01b2 monster 0x{id:x} flinch (animation {flinch.Index}, {flinch.Seconds:0.00} s)",
-            still: () => { lock (conn.Monsters) return m.Life > 0 && !m.Dead; });
-    }
+    // The attacker's stun duration modifier on the monsters it stuns (HitReaction.StunSeconds).
+    static int StunDurationPct(IReadOnlyDictionary<uint, int> stats) =>
+        Stats.Key("stun_duration_+%") is uint key ? stats.GetValueOrDefault(key) : 0;
 
     internal sealed record PlayerRecoveryIntent(int Epoch, int Action, double Until, float Seconds);
 

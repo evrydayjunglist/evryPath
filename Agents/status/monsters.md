@@ -32,16 +32,19 @@ Part of [Status](../Status.md); what to build next in this area is in
   lurking Tide Striders on Tidal Island).
   Code: `MonsterEmerge.cs`, `Program.Emerge.cs`, Gateway.
   Docs: [10](../docs/protocol/10-chat-and-commands.md) §5.
-- Monster hit reaction: a hit that leaves a monster alive and takes at least a tenth of its max life plays one of its
-  rig's TakeHit clips with the clip's own sound (S→C 0x1b2 kind 0;
-  a pool picks one at random), and not again until that clip has played (at least 0.4 s);
-  a killing blow gets no flinch.
-  Verified live 2026-10-25 on the Sanctum zombie and the Goatman (melee and Holy Strike);
-  the damage and clip-length gates are not yet checked live.
-  The weapon impact sound and the target's blood come from S→C 0x1af "action hit", sent on melee and attack-gem hits
-  and on monster hits on the player (2026-10-25; not yet checked live after the timing cap).
-  Code: `HitReaction.cs`, `MonsterCatalog.TakeHit`, Gateway (`SendFlinch`), `scripts/re/monster_takehit.py` →
-  `data/monster-takehit.json`.
+- Monster hit effects and stun: every hit that lands on a monster — the default attack, attack and spell gems, and
+  projectiles — sends S→C 0x1af "action hit" with the hit's presentation: its damage type (the blood and particles),
+  its critical bit, and a stun. The stun follows PoE's rule (chance 200 × damage / max life, nothing at or below 20%,
+  350 ms grown by the attacker's stun duration, not while already stunned, never for Unwavering or a variety without a
+  TakeHit clip): the client interrupts the monster's current and queued actions and plays its TakeHit for the duration,
+  and the server stops the monster's walk, holds its AI for the duration and cancels a swing that started before the
+  stun, so its attack does not land while it reels. A killing blow sends no stun. The earlier cosmetic 0x1b2 flinch
+  (verified live 2026-10-25 on the Sanctum zombie and the Goatman) is no longer sent for hits.
+  Monster hits on the player send 0x1af with the attack's type and its critical or block bit (processed at once,
+  kind 3); the player's stun stays on 0x1d1. Not modelled: knockback, monster stun recovery modifiers.
+  Not yet checked live: the 0x1af stun on monsters, the type particles, the critical layer (2026-10-28).
+  Code: `HitPresentation.cs` (Core), `HitReaction.cs`, `MonsterCatalog.TakeHit`, Gateway (`NotifyMonsterHit`,
+  `MonsterSwing`, `CommitProjectileHit`), `scripts/re/monster_takehit.py` → `data/monster-takehit.json`.
   Docs: [11](../docs/protocol/11-skills.md).
 - Magic and rare monsters roll their mods from Mods.dat (monster domain, spawn weights by the monster's tags, level,
   one per family): magic one affix shared by the monsters of one name in an instance, rare two to four (poewiki

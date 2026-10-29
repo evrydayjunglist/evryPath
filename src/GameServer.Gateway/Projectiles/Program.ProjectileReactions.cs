@@ -13,7 +13,7 @@ partial class Program
 
     // Called synchronously under XP -> combat lock. The outbox contains notifications of committed results.
     static void CommitProjectileHit(ProjectileSession session, ProjectileDamage contact, SpawnedMonster target,
-        MonsterHit hit, int damage, ProjectileOffense shot, bool critical)
+        MonsterHit hit, int damage, ProjectileOffense shot, bool critical, MonsterHitEffects effects)
     {
         var conn = session.Conn;
         double now = contact.At / (double)ProjectileRuntime.QuantaPerSecond;
@@ -22,8 +22,14 @@ partial class Program
         var random = contact.Projectile.ReactionRandomSource;
         if (hit.Life == 0)
             session.Packet(InstanceEntities.StatsUpdate(id, [(StatKeys.HideMiniLifeBar, 1)]));
-        if (HitReaction.TryFlinch(target, damage, now, random) is { } flinch)
-            session.Packet(InstanceProtocol.AnimationUpdate(id, 0, (uint)flinch.Index, 1));
+        // The hit's presentation on the target (0x1af, as the melee and skill hits send it): blood and particles by the
+        // hit's type, the critical layer, and the stun that interrupts the monster. The projectile's action is over by
+        // the contact, so the sequence names none (0xffff): the client renders the package without an action context.
+        // The angle runs from the contact point to the target.
+        var (tx, ty) = target.Walk.Position(now);
+        session.Packet(InstanceProtocol.ActionHit(PlayerId, 0xffff, id, flags: effects.Flags, kind: 0x03, code: effects.Code,
+                angle: HitAngle((int)Math.Round(tx - contact.Position.X), (int)Math.Round(ty - contact.Position.Y)), u34: effects.StunMs),
+            effects.StunSeconds is null ? null : $"0x01af projectile {shot.Label} hit on monster 0x{id:x} ({effects})");
         session.Packet(InstanceProtocol.LifeUpdate(id, hit.Life),
             $"projectile {shot.Label} {contact.Stage} t={now:0.000000} use={contact.Projectile.UseId} entity={contact.Projectile.Id}"
             + $" phase={contact.Phase} form={contact.Projectile.Form} at={contact.Position}"

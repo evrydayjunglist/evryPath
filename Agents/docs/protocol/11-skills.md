@@ -784,25 +784,32 @@ Live 2026-10-18 with the Witch's Fireball. Code: `SkillCatalog.EffectStats`, `Ge
   the walking evidence is manual native RE.
   Departure/arrival damage, chilled ground, nearby-enemy cooldown recovery, shared Blink cooldown groups,
   other location instant skills and complete movement restriction/terrain searches remain unimplemented.
-- **Hit reaction (live 2026-10-25).** A monster that takes a hit plays its rig's **TakeHit** clip with S→C **0x1b2**
-  (`InstanceProtocol.AnimationUpdate`, kind 0): object header, u8 kind, u32 clip index (+0x24), u32 float bits (speed,
-  +0x28). The index is 0-based into the actor's animation list, which is the rig `.amd`'s animations in file order
-  (Sanctum zombie: `flinch_unarmed` = 156 of 249 in `Art/Models/MONSTERS/skeleton/rig.amd`; `flinch_pitchfork` = 151,
-  both played the flinch *with its SoundEvent* live). The handler (`0x141e58ef0`) calls `0x141dba530`, which ignores an
-  index past the actor's animation count — a wrong index costs nothing. `0x1b1` alone only stores the pool and runs the
-  death/revive slots, so a hit without 0x1b2 is silent and still. A killing blow gets no flinch (the client's death
-  runs instead). The reaction is gated like a stun: the hit must take at least a tenth of the monster's max life, and a
-  monster does not flinch again until its clip has played (its `.amd` length at speed 1, at least 0.4 s) — otherwise a
-  fast attack or a volley restarts the clip and its sound and keeps cutting the monster's own attack and walk animations
-  while the server still moves it. The flinch is checked again inside the connection's send gate, so a hit that kills
-  the monster meanwhile (marked Dead before its own 0x1b1 goes out) drops it rather than playing it over the death.
-  `data/monster-takehit.json` (`python -I scripts/re/monster_takehit.py`) holds each MonsterVarieties
+- **Monster stun and hit reaction (live 2026-10-25; stun 2026-10-28).** A monster's hit reaction is its stun: the hit's
+  0x1af with flags 0x400 and a duration (see "Hit effects") makes the client interrupt the monster's current and queued
+  actions and play its TakeHit for that long. The server rolls PoE's stun (`HitReaction`): chance 200 × damage /
+  maximum life in percent, nothing at or below 20% (so half its life always stuns, a tenth never), 350 ms grown by the
+  attacker's `stun_duration_+%`; not while already stunned (the client rejects that too), never for
+  `base_cannot_be_stunned` (Unwavering) or a variety without a TakeHit clip, and never on a killing blow (the client's
+  death runs instead). On the server the stun stops the monster's walk estimate, holds its AI (`BusyUntil`) and cancels
+  a swing that started before it at its contact (`MonsterSwing`), so the monster's attack does not land while the
+  client shows it reeling; the AI orders a fresh chase afterwards. The client's own checks (`avoid_interruption_%`,
+  recent-stun immunity) can still reject a stun the server accepted; then the monster only stands for the duration.
+  Monster stun recovery modifiers are not modelled.
+  Before this, the reaction was a clip change with S→C **0x1b2** (`InstanceProtocol.AnimationUpdate`, kind 0: object
+  header, u8 kind, u32 clip index (+0x24), u32 float bits (speed, +0x28); the index is 0-based into the actor's
+  animation list, the rig `.amd`'s animations in file order — Sanctum zombie: `flinch_unarmed` = 156 of 249 in
+  `Art/Models/MONSTERS/skeleton/rig.amd`; `flinch_pitchfork` = 151, both played the flinch *with its SoundEvent* live).
+  The handler (`0x141e58ef0`) calls `0x141dba530`, which ignores an index past the actor's animation count. It only
+  changes the visible clip: it does not interrupt the monster's action, and `0x1b1` alone only stores the pool and runs
+  the death/revive slots, so a hit without a reaction is silent and still. The server no longer sends 0x1b2 for hits;
+  `data/monster-takehit.json` (`python -I scripts/re/monster_takehit.py`; the server now only reads it to know a
+  variety has a TakeHit clip to play) holds each MonsterVarieties
   row's index(es) and clip lengths: its `.act` maps `TakeHit` to a clip, and the `.ao`'s `AnimationController` names
   the rig. A rig whose parsed animations do not add up to the `.amd`'s count line is skipped (a missed entry would shift
   every later index to a wrong but in-range clip). 26 `.act`
   files map a pool — `flinch_01, flinch_02, flinch_03`, or `flinch_small:max_duration=0.45, flinch_large:min_duration=0.45`
-  (the condition picks by the hit's stun duration, which the server does not model) — and the server picks one at random
-  per hit; every other variety has a single clip. An `@Name` alias is expanded to the whole list it names, and every
+  (the condition picks by the hit's stun duration, which the 0x1af stun now supplies; the 0x1b2 path picked one at
+  random per hit); every other variety has a single clip. An `@Name` alias is expanded to the whole list it names, and every
   `extends` parent is followed (not just the first), with "nothing" ending the chain. The client also has the directional
   types TakeHitForward/Backward/Left/Right, but the `.act` files that set them alias them all to `@TakeHit`, so they add
   no variants. 0x262 (a Life "changed by" event with a signed delta) reaches the Life listeners but plays no flinch,
@@ -858,15 +865,32 @@ Live 2026-10-18 with the Witch's Fireball. Code: `SkillCatalog.EffectStats`, `Ge
   Conditional stun-defence builds, flat/substituted thresholds and CI are also skipped conservatively.
   An equipped skill with `skill_cannot_be_stunned` or contact-phase immunity disables this slice for the build.
   Its precise active action phase is not tracked, so even an inactive equipped skill is conservatively excluded.
-- **Hit effects (2026-10-25).** The target's blood and the weapon impact sound come from S→C **0x1af** "action hit"
-  (`InstanceProtocol.ActionHit`; class `0x1435ddb38`, read `0x141fddba0` → `0x1419bd6f0`, Actor handler `0x1421940a0`
-  → `0x141e90f50`): object header (the attacker), u16 action sequence (must match the action's), u8, u8 skill index
-  (0 = the current action), u32 target id, u16 flags, u8 kind (bit 0: belongs to an action, bit 1: hit data follows).
-  With bit 1: a u16 if `flags & 0x400` (`flags >> 10 & 1` in the reader), u8 code, u8 hit angle (0..255 a full turn,
-  `atan2(dx, −dy)` from attacker to target), then a u16 for kind bit 2 and one for bit 3. The handler calls the
-  attacker's `ProcessDamagePackageInternal` (vtable +0x230), which plays the effects; 0x1b1 stays authoritative on
-  life. The server sends it before 0x1b1 on the default attack and on attack-gem hits (flags 0x4201, kind 3) and on a
-  monster's hit on the player (flags 0x4601 with u16 450, kind 2, sequence 0xffff); spells and projectiles skip it.
+- **Hit effects (2026-10-25, decoded 2026-10-28).** The target's blood, particles, impact sound, critical and block
+  layers, stun and knockback all come from S→C **0x1af** "action hit" (`InstanceProtocol.ActionHit`; class
+  `0x1435ddb38`, read `0x141fddba0` → `0x1419bd6f0`, Actor handler `0x1421940a0` → `0x141e90f50`): object header (the
+  attacker), u16 action sequence, u8 identity byte, u8 skill index (0 = the current action), u32 target id, u16
+  flags, u8 kind. **Kind bit 0 = process at once**; clear queues the package by sequence until its action consumes it
+  (a fabricated sequence may never be consumed). Bit 1: the hit data follows — a u16 **stun duration in ms** if
+  `flags & 0x400`, u8 code (low three bits the damage particle type: Physical 0, Cold 1, Fire 2, Lightning 3,
+  Chaos 4 — not the server's enum order; upper bits a variation), u8 hit angle (0..255 a full turn, `atan2(dx, −dy)`
+  from attacker to target), then an i16 knockback speed % for kind bit 2 and an i16 distance % for bit 3.
+  Flags: 0x0001 blood/ES hit, 0x0020 **critical**, 0x0040 **blocked** (with 0x400 a Block recovery), 0x0080 spell,
+  0x0100 off hand, 0x0200 main hand, 0x0400 **stun**, 0x0800 **knockback**, 0x4000 generic damage particles;
+  0x0002..0x0010, 0x1000, 0x2000, 0x8000 unnamed, and no evaded or no-damage encoding is established (code 0 is
+  Physical, not "no damage"). The handler resolves the action by sequence (a miss still processes, with no action) and
+  calls the attacker's `ProcessDamagePackageInternal` (vtable +0x230, `0x141e91580`): after the target's own immunity
+  checks (cannot be stunned, already stunned, `avoid_interruption_%`), 0x400 reaches `0x141e95e60` — the same
+  interruption 0x1d1 uses, cancelling the current and pending actions and playing the directional TakeHit (Animation.dat
+  125–128, aliased to row 5) for the duration — and 0x800 `Actor::OnKnockback` (`0x141e96790`), which moves the target.
+  DamageHitEffects rows are picked by (reaction: critical 1 over stun 2 over normal 0, type, effect id) with Any/normal
+  fallbacks; the same callback serves spell and projectile contacts. 0x1b1 stays authoritative on life. Static decode
+  with evidence: research/poe-rea-reference `Agents/docs/re/action-hit-packet-3.29.3b.md`.
+  The server (`HitPresentation`, `HitReaction`) sends it, kind 3, before 0x1b1 on every hit that lands on a monster —
+  the default attack and attack gems (0x4201 base), spells (0x4081) and projectiles (sequence 0xffff: the action is
+  over by the contact) — with the hit's dominant type as the code, 0x20 when it was a critical, and 0x400 with the
+  duration when it stunned (see the monster stun entry). A monster's hit on the player sends 0x4201 with the attack's
+  type and 0x20/0x40 for its critical/block (kind 3, sequence 0xffff, the sequence its 0x1ab started with); the player's
+  stun stays on 0x1d1 so the client does not roll a second avoidance. Not yet checked live.
 - **Release.** A spell leaves at its cast animation's **contact** keyframe, which the client plays stretched to the cast
   time: the Witch's `spell_projectile_wand` in `Art/Models/CHARACTERS/Witch/rig.amd` is 1066 ms long with `contact` at
   599 ms, so Fireball leaves after 56% of the cast. `python -I scripts/re/anim_contacts.py` writes every class's

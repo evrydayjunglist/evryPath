@@ -10,7 +10,7 @@ public partial class VaalSoulGatewayTests
     {
         var target = f.Monster(corpse: false);
         return (Task)Call("HitMonster", "soul-r2-outgoing", wire.Stream, wire.Ciphers, f.Conn, f.Id(target), target,
-            10, "soul R2 test", false, false, (ushort)0, null, null, null);
+            10, "soul R2 test", false, null, (ushort)0, null, null, null);
     }
 
     static async Task<Task> HoldActualPlayerDeath(Fixture f, Wire wire, string route)

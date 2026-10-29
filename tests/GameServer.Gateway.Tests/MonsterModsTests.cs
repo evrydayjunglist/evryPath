@@ -384,12 +384,12 @@ public class MonsterModsTests
     }
 
     [Fact]
-    public void Unwavering_monsters_do_not_flinch()
+    public void Unwavering_monsters_are_not_stunned()
     {
         var m = Monster(With(MonsterRarity.Rare, 60, "MonsterModCannotBeStunned"), clips: [new HitAnimation(3, 0.5)]);
-        Assert.Null(HitReaction.TryFlinch(m, 900, 10, new Random(1)));
+        Assert.Null(HitReaction.TryStun(m, 900, 10, new Random(1)));
         var plain = Monster(MonsterModSet.None, clips: [new HitAnimation(3, 0.5)]);
-        Assert.NotNull(HitReaction.TryFlinch(plain, 900, 10, new Random(1)));
+        Assert.NotNull(HitReaction.TryStun(plain, 900, 10, new Random(1)));
     }
 
     // ---- Client stats and blob ----

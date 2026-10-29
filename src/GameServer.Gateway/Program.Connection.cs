@@ -309,7 +309,7 @@ partial class Program
     // One sender at a time per connection: the Salsa20 keystream must be applied and written in the same order (the read
     // loop, the monster AI tick and the transfer timer all send).
     // `still`, when given, is checked inside the connection's send gate and drops the packet when false: a packet decided
-    // before another task's packets were sent can check that it still applies (SendFlinch).
+    // before another task's packets were sent can check that it still applies (MonsterSwing's attack echo).
     // Projectile impacts commit their short locked damage mutation inside this gate before relocation.
     // A factory samples clock-sensitive state and constructs its packet after earlier sends; null sends nothing.
     internal static async Task Send(string remote, NetworkStream stream, ConnectionCiphers ciphers, byte[] bytes, string? log,

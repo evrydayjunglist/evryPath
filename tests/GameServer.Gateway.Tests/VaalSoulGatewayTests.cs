@@ -151,7 +151,7 @@ public partial class VaalSoulGatewayTests
         await wire.Gate.WaitAsync();
         if (path == "shared")
             return (Task)Call("HitMonster", "soul-held-hit", wire.Stream, wire.Ciphers, f.Conn, id, monster,
-                10, "soul test", false, false, (ushort)0, null, null, null);
+                10, "soul test", false, null, (ushort)0, null, null, null);
         var rf = new RighteousFireState(1, 2, null, SkillCatalog.FirstSkillId, 6000, 0, 1000);
         f.Conn.RighteousFire = rf;
         return (Task)Call("BurnAround", "soul-held-rf", wire.Stream, wire.Ciphers, f.Conn, rf, 1.0);

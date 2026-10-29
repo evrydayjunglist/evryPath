@@ -244,13 +244,20 @@ public static class InstanceProtocol
 
     /// <summary>
     /// S→C 0x1af "action hit" (class 0x1435ddb38, read 0x141fddba0 → 0x1419bd6f0; Actor handler 0x1421940a0 → 0x141e90f50):
-    /// the hit result of an action. The object header names the attacker; then u16 action sequence (+0x40, must match the
-    /// action's +0x11a), u8 (+0x43), u8 skill index (+0x42, 0 = the actor's current action), u32 target object id (+0x44),
-    /// u16 flags (+0x36), u8 kind bits (bit 0: the message belongs to an action, bit 1: the hit data follows, bits 2/3: a
-    /// further u16 each), then u8 (+0x39) and u8 hit angle (+0x3a: 0..255 = a full turn). The handler looks the action up,
-    /// picks the damage stat container (or the one the action's sequence names) and calls the attacker Actor's
-    /// ProcessDamagePackageInternal (vtable +0x230, 0x141e91580): the client applies the hit locally, which is what plays
-    /// the blood particles and the weapon impact sound ("bonk") on the target. Server life (0x1b1) stays authoritative.
+    /// the hit result of an action. The object header names the attacker; then u16 action sequence (+0x40, the action's
+    /// +0x11a), u8 (+0x43, a further identity byte), u8 skill index (+0x42, 0 = the actor's current action), u32 target
+    /// object id (+0x44), u16 flags (+0x36, <see cref="HitPresentation"/>: 0x20 critical, 0x40 blocked, 0x80 spell,
+    /// 0x100/0x200 off/main hand, 0x400 stun, 0x800 knockback, 0x4000 particles, 0x1 blood), u8 kind (bit 0: process
+    /// at once — clear queues the package by sequence until its action consumes it; bit 1: the hit data follows; bits
+    /// 2/3: a knockback speed and distance modifier, i16 percent each). With bit 1: a u16 stun duration in milliseconds
+    /// if flags &amp; 0x400 (<paramref name="u34"/>), u8 code (+0x39: low three bits the damage particle type, Physical 0,
+    /// Cold 1, Fire 2, Lightning 3, Chaos 4; upper bits a variation), u8 hit angle (+0x3a: 0..255 = a full turn), then
+    /// the kind bit 2/3 values. The handler resolves the action by sequence (a miss still processes with no action) and
+    /// calls the attacker Actor's ProcessDamagePackageInternal (vtable +0x230, 0x141e91580): the client applies the hit
+    /// locally — the target's blood and particles, the impact sound, the critical and block layers, and with 0x400 the
+    /// stun interruption (0x141e95e60, as 0x1d1) and with 0x800 the knockback movement — after its own immunity checks.
+    /// Server life (0x1b1) stays authoritative. Static decode: research/poe-rea-reference
+    /// Agents/docs/re/action-hit-packet-3.29.3b.md.
     /// </summary>
     public static byte[] ActionHit(uint objectId, ushort sequence, uint targetObjectId, byte actionByte = 0,
         byte skillIndex = 0, ushort flags = 0, byte kind = 0x03, byte code = 0, byte angle = 0, ushort u34 = 0,
